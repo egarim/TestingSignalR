@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace TestingSignalR
 {
-    public class ChatHub : Microsoft.AspNetCore.SignalR.Hub
+    public class SimpleChatHub : Microsoft.AspNetCore.SignalR.Hub
     {
         public async Task SendMessage(string user, string message)
         {

@@ -20,7 +20,7 @@ namespace TestingSignalR
             app.UseRouting();
             app.UseEndpoints(endpoints =>
             {
-                endpoints.MapHub<ChatHub>("/chathub");
+                endpoints.MapHub<SimpleChatHub>("/chathub");
             });
         }
     }
