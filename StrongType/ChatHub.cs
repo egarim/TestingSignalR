@@ -1,5 +1,7 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace TestingSignalR.StrongType
 {
@@ -14,6 +16,9 @@ namespace TestingSignalR.StrongType
 
         // Dictionary to track user information
         private static readonly Dictionary<string, UserStatus> _userStatusMap = new Dictionary<string, UserStatus>();
+
+        // Dictionary to track streaming messages
+        private static readonly Dictionary<string, ChatMessage> _streamingMessages = new Dictionary<string, ChatMessage>();
 
         // Join a chat room
         public async Task JoinRoom(string roomId, string userName)
@@ -121,7 +126,10 @@ namespace TestingSignalR.StrongType
                 SenderName = userName,
                 RoomId = roomId,
                 Content = message,
-                Timestamp = timestamp
+                Timestamp = timestamp,
+                MessageId = Guid.NewGuid().ToString(),
+                IsStreaming = false,
+                IsComplete = true
             };
 
             // Send the message to all clients in the room
@@ -131,6 +139,166 @@ namespace TestingSignalR.StrongType
             if (_userStatusMap.ContainsKey(connectionId))
             {
                 _userStatusMap[connectionId].LastActivity = timestamp;
+            }
+        }
+
+        // Start streaming a message
+        public async Task StartStreamingMessage(string roomId)
+        {
+            var connectionId = Context.ConnectionId;
+
+            if (!_userStatusMap.ContainsKey(connectionId))
+            {
+                throw new HubException("User not found. Please join the chat first.");
+            }
+
+            var userName = _userStatusMap[connectionId].UserName;
+            var timestamp = DateTime.UtcNow;
+            var messageId = Guid.NewGuid().ToString();
+
+            // Create a streaming message
+            var streamingMessage = new ChatMessage
+            {
+                MessageId = messageId,
+                SenderId = connectionId,
+                SenderName = userName,
+                RoomId = roomId,
+                Content = string.Empty,
+                Timestamp = timestamp,
+                IsStreaming = true,
+                IsComplete = false
+            };
+
+            // Store the message for later updates
+            _streamingMessages[messageId] = streamingMessage;
+
+            // Send initial streaming message to all clients in the room
+            await Clients.Group(roomId).ReceiveStreamingMessage(streamingMessage);
+
+            // Update user's last activity
+            _userStatusMap[connectionId].LastActivity = timestamp;
+        }
+
+        // Update streaming message content
+        public async Task UpdateStreamingMessage(string messageId, string content)
+        {
+            var connectionId = Context.ConnectionId;
+
+            if (!_streamingMessages.ContainsKey(messageId))
+            {
+                throw new HubException("Streaming message not found.");
+            }
+
+            var message = _streamingMessages[messageId];
+
+            // Check if the sender is updating their own message
+            if (message.SenderId != connectionId)
+            {
+                throw new HubException("You can only update your own messages.");
+            }
+
+            // Update the message content
+            message.Content = content;
+
+            // Send the updated streaming message to all clients in the room
+            await Clients.Group(message.RoomId).ReceiveStreamingMessage(message);
+        }
+
+        // Complete a streaming message
+        public async Task CompleteStreamingMessage(string messageId)
+        {
+            var connectionId = Context.ConnectionId;
+
+            if (!_streamingMessages.ContainsKey(messageId))
+            {
+                throw new HubException("Streaming message not found.");
+            }
+
+            var message = _streamingMessages[messageId];
+
+            // Check if the sender is completing their own message
+            if (message.SenderId != connectionId)
+            {
+                throw new HubException("You can only complete your own messages.");
+            }
+
+            // Mark the message as complete
+            message.IsComplete = true;
+            message.IsStreaming = false;
+
+            // Send the final message to all clients in the room
+            await Clients.Group(message.RoomId).ReceiveStreamingMessage(message);
+
+            // Remove the message from the streaming dictionary
+            _streamingMessages.Remove(messageId);
+        }
+
+        // Send a message with attachments
+        public async Task SendMessageWithAttachments(string roomId, string message, List<Attachment> attachments)
+        {
+            var connectionId = Context.ConnectionId;
+
+            if (!_userStatusMap.ContainsKey(connectionId))
+            {
+                throw new HubException("User not found. Please join the chat first.");
+            }
+
+            var userName = _userStatusMap[connectionId].UserName;
+            var timestamp = DateTime.UtcNow;
+            var messageId = Guid.NewGuid().ToString();
+
+            // Create the message object
+            var chatMessage = new ChatMessage
+            {
+                SenderId = connectionId,
+                SenderName = userName,
+                RoomId = roomId,
+                Content = message,
+                Timestamp = timestamp,
+                MessageId = messageId,
+                IsStreaming = false,
+                IsComplete = true,
+                Attachments = attachments ?? new List<Attachment>()
+            };
+
+            // Send the message to all clients in the room
+            await Clients.Group(roomId).ReceiveMessage(chatMessage);
+
+            // Update user's last activity
+            if (_userStatusMap.ContainsKey(connectionId))
+            {
+                _userStatusMap[connectionId].LastActivity = timestamp;
+            }
+        }
+
+        // Add an attachment to an existing message
+        public async Task AddAttachmentToMessage(string messageId, Attachment attachment)
+        {
+            var connectionId = Context.ConnectionId;
+
+            // Check if it's a streaming message
+            if (_streamingMessages.ContainsKey(messageId))
+            {
+                var message = _streamingMessages[messageId];
+
+                // Check if the sender is updating their own message
+                if (message.SenderId != connectionId)
+                {
+                    throw new HubException("You can only add attachments to your own messages.");
+                }
+
+                // Add the attachment
+                message.Attachments.Add(attachment);
+
+                // Notify about the new attachment
+                await Clients.Group(message.RoomId).ReceiveAttachment(messageId, attachment);
+
+                // Also update the streaming message content
+                await Clients.Group(message.RoomId).ReceiveStreamingMessage(message);
+            }
+            else
+            {
+                throw new HubException("Message not found or not a streaming message.");
             }
         }
 

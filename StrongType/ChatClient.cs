@@ -29,6 +29,10 @@ namespace TestingSignalR.StrongType
 
         public event EventHandler<ConnectionStatusChangedEventArgs> OnConnectionStatusChanged;
 
+        // New events for streaming and attachments
+        public event EventHandler<StreamingMessageReceivedEventArgs> OnStreamingMessageReceived;
+        public event EventHandler<AttachmentReceivedEventArgs> OnAttachmentReceived;
+
         public ChatClient(string hubUrl, ILogger<ChatClient> logger = null, HttpMessageHandler httpMessageHandler = null)
         {
             _logger = logger;
@@ -144,6 +148,19 @@ namespace TestingSignalR.StrongType
                 _logger?.LogDebug($"User {userName} is {(isTyping ? "typing" : "not typing")} in room {roomId}.");
                 OnTypingIndicatorChanged?.Invoke(this, new TypingIndicatorChangedEventArgs(userId, userName, roomId, isTyping));
             });
+
+            // New streaming and attachment events
+            _connection.On<ChatMessage>("ReceiveStreamingMessage", (message) =>
+            {
+                _logger?.LogInformation($"Streaming message received/updated from {message.SenderName} in room {message.RoomId}.");
+                OnStreamingMessageReceived?.Invoke(this, new StreamingMessageReceivedEventArgs(message));
+            });
+
+            _connection.On<string, Attachment>("ReceiveAttachment", (messageId, attachment) =>
+            {
+                _logger?.LogInformation($"Attachment received for message {messageId}: {attachment.FileName}.");
+                OnAttachmentReceived?.Invoke(this, new AttachmentReceivedEventArgs(messageId, attachment));
+            });
         }
 
         // Handle connection state changes
@@ -190,6 +207,37 @@ namespace TestingSignalR.StrongType
             await _connection.InvokeAsync("SendMessage", roomId, message);
         }
 
+        // New methods for streaming and attachments
+        public async Task StartStreamingMessageAsync(string roomId)
+        {
+            EnsureConnected();
+            await _connection.InvokeAsync("StartStreamingMessage", roomId);
+        }
+
+        public async Task UpdateStreamingMessageAsync(string messageId, string content)
+        {
+            EnsureConnected();
+            await _connection.InvokeAsync("UpdateStreamingMessage", messageId, content);
+        }
+
+        public async Task CompleteStreamingMessageAsync(string messageId)
+        {
+            EnsureConnected();
+            await _connection.InvokeAsync("CompleteStreamingMessage", messageId);
+        }
+
+        public async Task SendMessageWithAttachmentsAsync(string roomId, string message, List<Attachment> attachments)
+        {
+            EnsureConnected();
+            await _connection.InvokeAsync("SendMessageWithAttachments", roomId, message, attachments);
+        }
+
+        public async Task AddAttachmentToMessageAsync(string messageId, Attachment attachment)
+        {
+            EnsureConnected();
+            await _connection.InvokeAsync("AddAttachmentToMessage", messageId, attachment);
+        }
+
         public async Task SendTypingIndicatorAsync(string roomId, bool isTyping)
         {
             EnsureConnected();
@@ -233,8 +281,26 @@ namespace TestingSignalR.StrongType
         }
     }
 
-    // Event argument classes
-    #region Event Arguments
+    // New event arguments for streaming and attachments
+    public class StreamingMessageReceivedEventArgs : EventArgs
+    {
+        public ChatMessage Message { get; }
 
-    #endregion
+        public StreamingMessageReceivedEventArgs(ChatMessage message)
+        {
+            Message = message;
+        }
+    }
+
+    public class AttachmentReceivedEventArgs : EventArgs
+    {
+        public string MessageId { get; }
+        public Attachment Attachment { get; }
+
+        public AttachmentReceivedEventArgs(string messageId, Attachment attachment)
+        {
+            MessageId = messageId;
+            Attachment = attachment;
+        }
+    }
 }

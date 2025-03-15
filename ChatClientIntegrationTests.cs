@@ -229,6 +229,8 @@ namespace TestingSignalR
             // Act - Client2 joins later
             await _client2.JoinRoomAsync(TestRoomId, "TestUser2");
 
+            Thread.Sleep(200); // Wait for the event to be raised
+
             // Wait for Client1 to receive the notification with timeout
             var joinResult = await userJoinedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -387,23 +389,174 @@ namespace TestingSignalR
             // Assert
             Assert.That(disconnectedUserName, Is.EqualTo("TestUser1"));
         }
+
+
+        [Test]
+        public async Task Client_StreamingMessage_ShouldSendUpdatesAndComplete()
+        {
+            // Arrange
+            var streamStartTcs = new TaskCompletionSource<string>();
+            var streamUpdateTcs = new TaskCompletionSource<string>();
+            var streamCompleteTcs = new TaskCompletionSource<bool>();
+            string messageId = null;
+
+            // Both clients join the room
+            await _client1.JoinRoomAsync(TestRoomId, "TestUser1");
+            await _client2.JoinRoomAsync(TestRoomId, "TestUser2");
+
+            // Subscribe to streaming events on client2
+            _client2.OnStreamingMessageReceived += (sender, e) =>
+            {
+                if (messageId == null)
+                {
+                    // First streaming message received
+                    messageId = e.Message.MessageId;
+                    streamStartTcs.TrySetResult(messageId);
+                }
+                else if (messageId == e.Message.MessageId && !string.IsNullOrEmpty(e.Message.Content) && e.Message.IsStreaming)
+                {
+                    // Update to streaming message
+                    streamUpdateTcs.TrySetResult(e.Message.Content);
+                }
+                else if (messageId == e.Message.MessageId && !e.Message.IsStreaming && e.Message.IsComplete)
+                {
+                    // Streaming complete
+                    streamCompleteTcs.TrySetResult(true);
+                }
+            };
+
+            // Act - Start streaming
+            await _client1.StartStreamingMessageAsync(TestRoomId);
+
+            // Wait for the stream to start
+            messageId = await streamStartTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(messageId, Is.Not.Null, "Failed to receive stream start notification");
+
+            // Update the stream with content
+            const string partialContent = "This is a partial message...";
+            await _client1.UpdateStreamingMessageAsync(messageId, partialContent);
+
+            // Wait for stream update
+            var receivedContent = await streamUpdateTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(receivedContent, Is.EqualTo(partialContent), "Failed to receive streaming update");
+
+            // Complete the stream
+            await _client1.CompleteStreamingMessageAsync(messageId);
+
+            // Wait for stream completion
+            var completed = await streamCompleteTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(completed, Is.True, "Failed to receive stream completion notification");
+        }
+
+        [Test]
+        public async Task Client_SendMessageWithAttachments_ShouldReceiveMessageWithAttachments()
+        {
+            // Arrange
+            var messageReceivedTcs = new TaskCompletionSource<ChatMessage>();
+
+            // Join rooms
+            await _client1.JoinRoomAsync(TestRoomId, "TestUser1");
+            await _client2.JoinRoomAsync(TestRoomId, "TestUser2");
+
+            // Subscribe to message event on client2
+            _client2.OnMessageReceived += (sender, e) =>
+            {
+                if (e.Message.Attachments != null && e.Message.Attachments.Count > 0)
+                {
+                    messageReceivedTcs.TrySetResult(e.Message);
+                }
+            };
+
+            // Create test message and attachment
+            const string testMessage = "Here's a file for you!";
+            var attachments = new List<Attachment>
+    {
+        new Attachment
+        {
+            FileName = "test-document.pdf",
+            FileUrl = "https://example.com/files/test-document.pdf",
+            ContentType = "application/pdf",
+            FileSize = 1024 * 1024  // 1MB
+        }
+    };
+
+            // Act - Client1 sends a message with attachment
+            await _client1.SendMessageWithAttachmentsAsync(TestRoomId, testMessage, attachments);
+
+            // Wait for Client2 to receive the message with timeout
+            var receivedMessage = await messageReceivedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Assert
+            Assert.That(receivedMessage, Is.Not.Null);
+            Assert.That(receivedMessage.Content, Is.EqualTo(testMessage));
+            Assert.That(receivedMessage.SenderName, Is.EqualTo("TestUser1"));
+            Assert.That(receivedMessage.Attachments, Is.Not.Null);
+            Assert.That(receivedMessage.Attachments.Count, Is.EqualTo(1));
+            Assert.That(receivedMessage.Attachments[0].FileName, Is.EqualTo("test-document.pdf"));
+            Assert.That(receivedMessage.Attachments[0].FileUrl, Is.EqualTo("https://example.com/files/test-document.pdf"));
+        }
+
+        [Test]
+        public async Task Client_AddAttachmentToStreamingMessage_ShouldReceiveAttachment()
+        {
+            // Arrange
+            var streamStartTcs = new TaskCompletionSource<string>();
+            var attachmentReceivedTcs = new TaskCompletionSource<Attachment>();
+            string messageId = null;
+
+            // Both clients join the room
+            await _client1.JoinRoomAsync(TestRoomId, "TestUser1");
+            await _client2.JoinRoomAsync(TestRoomId, "TestUser2");
+
+            // Subscribe to streaming events on client2
+            _client2.OnStreamingMessageReceived += (sender, e) =>
+            {
+                if (messageId == null)
+                {
+                    // First streaming message received
+                    messageId = e.Message.MessageId;
+                    streamStartTcs.TrySetResult(messageId);
+                }
+            };
+
+            // Subscribe to attachment events on client2
+            _client2.OnAttachmentReceived += (sender, e) =>
+            {
+                attachmentReceivedTcs.TrySetResult(e.Attachment);
+            };
+
+            // Act - Start streaming
+            await _client1.StartStreamingMessageAsync(TestRoomId);
+
+            // Wait for the stream to start
+            messageId = await streamStartTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(messageId, Is.Not.Null, "Failed to receive stream start notification");
+
+            // Create an attachment
+            var attachment = new Attachment
+            {
+                FileName = "streaming-image.jpg",
+                FileUrl = "https://example.com/files/streaming-image.jpg",
+                ContentType = "image/jpeg",
+                FileSize = 512 * 1024  // 512KB
+            };
+
+            // Add attachment to the streaming message
+            await _client1.AddAttachmentToMessageAsync(messageId, attachment);
+
+            // Wait for attachment received notification
+            var receivedAttachment = await attachmentReceivedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Assert
+            Assert.That(receivedAttachment, Is.Not.Null);
+            Assert.That(receivedAttachment.FileName, Is.EqualTo("streaming-image.jpg"));
+            Assert.That(receivedAttachment.FileUrl, Is.EqualTo("https://example.com/files/streaming-image.jpg"));
+
+            // Complete the stream
+            await _client1.CompleteStreamingMessageAsync(messageId);
+        }
+
     }
 
-    //// Extension to ChatClient to expose HttpMessageHandlerFactory
-    //public static class ChatClientExtensions
-    //{
-    //    public static Func<HttpMessageHandler, HttpMessageHandler> HttpMessageHandlerFactory
-    //    {
-    //        set
-    //        {
-    //            // Use reflection to set the HttpMessageHandlerFactory in the HubConnection
-    //            var hubConnectionField = typeof(ChatClient).GetField("_connection",
-    //                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-    //            var hubConnection = hubConnectionField.GetValue(client) as HubConnection;
-
-    //            typeof(HubConnection).GetProperty("HttpMessageHandlerFactory").SetValue(hubConnection, value);
-    //        }
-    //    }
-    //}
+  
 }

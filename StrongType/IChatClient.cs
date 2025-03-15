@@ -23,5 +23,9 @@ namespace TestingSignalR.StrongType
         // Message events
         Task ReceiveMessage(ChatMessage message);
         Task TypingIndicatorChanged(string userId, string userName, string roomId, bool isTyping);
+
+        // New methods for streaming and attachments
+        Task ReceiveStreamingMessage(ChatMessage message);
+        Task ReceiveAttachment(string messageId, Attachment attachment);
     }
 }
